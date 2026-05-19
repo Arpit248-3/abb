@@ -1,9 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, LineChart, Line, ComposedChart
 } from 'recharts';
 import { 
-  AlertTriangle, Activity, Clock, Zap, TrendingDown, PowerOff, ChevronDown, ChevronUp, Play, Pause, Thermometer, ShieldAlert, SkipBack, SkipForward
+  AlertTriangle, Activity, Clock, Zap, TrendingDown, PowerOff, ChevronDown, ChevronUp, Play, Pause, Thermometer, ShieldAlert, SkipBack, SkipForward, Check
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -21,7 +21,7 @@ const historicalData = [
   { time: 0, label: 'T-0', temp: 92, pressure: 80 },
 ];
 
-const DECISION_OS_SCENARIOS = {
+const DECISION_OS_SCENARIOS: Record<string, any> = {
   default: {
     label: "Unmitigated Fault State",
     globalHealth: 42,
@@ -105,6 +105,43 @@ export function DecisionOSView() {
   const [activeScenario, setActiveScenario] = useState<ScenarioKey>('default');
   const [timelineValue, setTimelineValue] = useState<number>(0);
   const [alertsExpanded, setAlertsExpanded] = useState(false);
+  
+  // NEW POLISH STATES
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [showToast, setShowToast] = useState(false);
+  const [toastData, setToastData] = useState({ title: "", description: "" });
+
+  const handleApplyScenario = (scenarioKey: ScenarioKey) => {
+    if (!DECISION_OS_SCENARIOS[scenarioKey]) return;
+    
+    setIsSimulating(true);
+    setShowToast(false); // Reset any lingering toast notifications
+    
+    // Fake 500ms compute bottleneck window
+    setTimeout(() => {
+      setIsSimulating(false);
+      setActiveScenario(scenarioKey);
+      setTimelineValue(5); // Jump to future scenario window
+      
+      // Trigger Success Toast only for active mitigation tactics
+      if (scenarioKey !== "default") {
+        setToastData({
+          title: "Mitigation Action Applied Successfully",
+          description: `System state changed to ${DECISION_OS_SCENARIOS[scenarioKey].label}. Global Health stabilized at ${DECISION_OS_SCENARIOS[scenarioKey].globalHealth}%.`
+        });
+        setShowToast(true);
+      }
+    }, 550);
+  };
+
+  // Auto-hide toast
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (showToast) {
+      timer = setTimeout(() => setShowToast(false), 5000);
+    }
+    return () => clearTimeout(timer);
+  }, [showToast]);
 
   // Generate chart data based on active scenario and timeline scrubber
   const fullChartData = useMemo(() => {
@@ -120,7 +157,7 @@ export function DecisionOSView() {
         futureTemp: d.time === 0 ? d.temp : null, // Connect at T-0
         futurePressure: d.time === 0 ? d.pressure : null
       })),
-      ...futureData.map(d => {
+      ...futureData.map((d: any) => {
         const tNum = parseInt(d.time.replace(/\D/g, '')) || 0;
         return {
           time: tNum,
@@ -258,6 +295,22 @@ export function DecisionOSView() {
 
             {/* THE DUAL-ZONE INTERACTIVE CHART */}
             <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-md relative overflow-hidden">
+              
+              {/* THE CHIPS GRAPHICS "PREDICTIVE CALCULATOR" LOADER OVERLAY */}
+              {isSimulating && (
+                <div className="absolute inset-0 z-40 bg-white/70 backdrop-blur-[2px] flex flex-col items-center justify-center border border-purple-500/20 rounded-xl transition-all duration-300">
+                  <div className="flex items-center gap-3 p-4 bg-white border border-zinc-200 rounded-xl shadow-xl">
+                    <svg className="animate-spin h-5 w-5 text-purple-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span className="text-xs font-mono text-zinc-700 uppercase tracking-widest animate-pulse font-bold">
+                      DecisionOS Core: Simulating Predictive Twin Outcomes...
+                    </span>
+                  </div>
+                </div>
+              )}
+
               <div className="flex items-center justify-between mb-6">
                 <div>
                   <h3 className="text-zinc-900 font-bold text-lg flex items-center gap-2">
@@ -401,7 +454,7 @@ export function DecisionOSView() {
                 
                 <ScenarioCard 
                   active={activeScenario === 'reduceLoad'}
-                  onClick={() => { setActiveScenario('reduceLoad'); setTimelineValue(5); }}
+                  onClick={() => handleApplyScenario('reduceLoad')}
                   title="Option A: Reduce Load by 30%"
                   icon={<TrendingDown className="w-5 h-5" />}
                   metrics={{ time: "5m", risk: "Low", riskColor: "text-emerald-700 bg-emerald-50 border-emerald-200", cost: "-2.4%" }}
@@ -409,7 +462,7 @@ export function DecisionOSView() {
 
                 <ScenarioCard 
                   active={activeScenario === 'triggerPump'}
-                  onClick={() => { setActiveScenario('triggerPump'); setTimelineValue(5); }}
+                  onClick={() => handleApplyScenario('triggerPump')}
                   title="Option B: Trigger Aux Coolant Pump"
                   icon={<Activity className="w-5 h-5" />}
                   metrics={{ time: "12m", risk: "High", riskColor: "text-orange-700 bg-orange-50 border-orange-200", cost: "-0.8%" }}
@@ -417,7 +470,7 @@ export function DecisionOSView() {
 
                 <ScenarioCard 
                   active={activeScenario === 'shutdown'}
-                  onClick={() => { setActiveScenario('shutdown'); setTimelineValue(5); }}
+                  onClick={() => handleApplyScenario('shutdown')}
                   title="Option C: Emergency Shutdown"
                   icon={<PowerOff className="w-5 h-5" />}
                   metrics={{ time: "2m", risk: "Critical", riskColor: "text-rose-700 bg-rose-50 border-rose-200", cost: "-45.0%" }}
@@ -426,7 +479,7 @@ export function DecisionOSView() {
               </div>
             </div>
 
-            {/* NEW DOMINO-EFFECT CASCADING RISK CARD */}
+            {/* DOMINO-EFFECT CASCADING RISK CARD */}
             <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-md transition-all duration-300">
               <div className="flex justify-between items-center mb-4 border-b border-zinc-100 pb-2">
                 <h3 className="font-bold text-zinc-900 text-sm tracking-wider uppercase flex items-center gap-2">
@@ -438,7 +491,7 @@ export function DecisionOSView() {
                 </span>
               </div>
               <div className="space-y-3">
-                {(DECISION_OS_SCENARIOS[activeScenario]?.dependencies || []).map((dep) => {
+                {(DECISION_OS_SCENARIOS[activeScenario]?.dependencies || []).map((dep: any) => {
                   const badgeColors: Record<string, string> = {
                     red: "bg-rose-50 text-rose-700 border-rose-200",
                     amber: "bg-amber-50 text-amber-700 border-amber-200",
@@ -463,6 +516,27 @@ export function DecisionOSView() {
 
         </div>
       </div>
+
+      {/* FLOATING SUCCESS NOTIFICATION TOAST */}
+      {showToast && (
+        <div className="fixed top-20 right-6 z-[100] max-w-sm bg-white border border-emerald-500/40 shadow-[0_10px_30px_rgba(16,185,129,0.15)] rounded-xl p-4 flex gap-3 animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="w-8 h-8 rounded-full bg-emerald-50 border border-emerald-500/30 flex items-center justify-center shrink-0 text-emerald-500">
+            <Check className="w-4 h-4" strokeWidth={2.5} />
+          </div>
+          <div className="flex-1">
+            <h4 className="text-sm font-bold text-zinc-900 font-mono tracking-wide">{toastData.title}</h4>
+            <p className="text-xs text-zinc-500 mt-1 leading-relaxed font-medium">{toastData.description}</p>
+          </div>
+          <button 
+            onClick={() => setShowToast(false)} 
+            className="text-zinc-400 hover:text-zinc-600 h-fit self-start p-0.5 rounded transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      )}
 
       {/* ANTI-CRASH TIMELINE SCREEN OVERLAYS */}
       {timelineValue !== 0 && (
@@ -516,7 +590,7 @@ function ScenarioCard({
       className={cn(
         "cursor-pointer rounded-xl border p-4 transition-all duration-300 relative overflow-hidden bg-white",
         active 
-          ? "border-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.15)] ring-1 ring-purple-100" 
+          ? "border-purple-500 bg-purple-50/50 shadow-[0_0_20px_rgba(168,85,247,0.2)] ring-1 ring-purple-500/30" 
           : "border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50"
       )}
     >
