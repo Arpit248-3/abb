@@ -40,6 +40,8 @@ import { RootCauseFlow } from "@/components/dashboard/RootCauseFlow"
 import { StatCards } from "@/components/dashboard/StatCards"
 import { SystemTrendChart } from "@/components/dashboard/SystemTrendChart"
 import type { TabKey } from "@/lib/dashboard-navigation"
+import { DecisionOSView } from "@/components/dashboard/DecisionOSView"
+
 
 function MetricCard({
   icon: Icon,
@@ -141,39 +143,7 @@ const settingsGroups = [
 ]
 
 function OverviewView() {
-  return (
-    <div className="grid grid-cols-1 xl:grid-cols-12 gap-2">
-      <div className="xl:col-span-9 space-y-2 flex flex-col">
-        <StatCards />
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          <div className="min-h-[300px]">
-            <AlertsChart />
-          </div>
-          <div className="min-h-[300px]">
-            <SystemTrendChart />
-          </div>
-        </div>
-
-        <div className="flex-1 min-h-[350px]">
-          <ProcessOverview />
-        </div>
-
-        <div className="min-h-[300px]">
-          <AlertsTable />
-        </div>
-      </div>
-
-      <div className="xl:col-span-3 space-y-2 flex flex-col">
-        <AIRecPanel />
-        <AIExplanation />
-        <div className="min-h-[250px]">
-          <RootCauseFlow />
-        </div>
-        <ReplayTimeline />
-      </div>
-    </div>
-  )
+  return <DecisionOSView />
 }
 
 function AlertsView() {
