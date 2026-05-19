@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { useDecisionOS } from '@/hooks/useDecisionOS';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, LineChart, Line, ComposedChart
 } from 'recharts';
@@ -111,6 +112,103 @@ export function DecisionOSView() {
   const [showToast, setShowToast] = useState(false);
   const [toastData, setToastData] = useState({ title: "", description: "" });
 
+  // ── BACKEND INTEGRATION ──────────────────────────────────────────────────
+  const {
+    isBackendOnline, isOllamaOnline, isLangGraphEnabled,
+    telemetry, telemetryHistory,
+    alerts: backendAlerts, primaryAlert, suppressedAlerts,
+    rootCause, decision, simulations, downstream,
+    loading: backendLoading,
+    triggerFault: doTriggerFault,
+    resetSystem: doResetSystem,
+    applyAction: doApplyAction,
+  } = useDecisionOS();
+
+  // Map backend mode to active scenario key
+  useEffect(() => {
+    if (!isBackendOnline) return;
+    const mode = telemetry?.mode;
+    if (mode === 'NORMAL') setActiveScenario('default');
+    else if (mode === 'RECOVERY') {
+      const appliedAction = decision?.recommendedAction;
+      if (appliedAction === 'EMERGENCY_TRIP') setActiveScenario('shutdown');
+      else if (appliedAction === 'INCREASE_COOLANT_FLOW') setActiveScenario('triggerPump');
+      else setActiveScenario('reduceLoad');
+    } else if (mode === 'TRIPPED') setActiveScenario('shutdown');
+  }, [telemetry?.mode, decision?.recommendedAction, isBackendOnline]);
+
+  // Build chart history from live telemetry stream
+  const liveChartData = useMemo(() => {
+    if (!isBackendOnline || telemetryHistory.length === 0) return null;
+    return telemetryHistory.slice(-15).map((t, i) => ({
+      time: i - Math.min(14, telemetryHistory.length - 1),
+      label: `T${i - Math.min(14, telemetryHistory.length - 1)}s`,
+      pastTemp: t.sensors?.generator_temperature ?? 72,
+      pastPressure: t.sensors?.pressure ?? 68,
+      futureTemp: null as number | null,
+      futurePressure: null as number | null,
+    }));
+  }, [telemetryHistory, isBackendOnline]);
+
+  // Derived KPI values: backend preferred, fallback to mock scenario data
+  const liveHealth = useMemo(() => {
+    if (!isBackendOnline) return null;
+    const temp = telemetry?.sensors?.generator_temperature ?? 72;
+    const mode = telemetry?.mode ?? 'NORMAL';
+    if (mode === 'NORMAL') return { health: 96, color: 'text-emerald-600', efficiency: 'Optimal (96%)', risk: 'STABLE' };
+    if (mode === 'TRIPPED') return { health: 15, color: 'text-rose-700', efficiency: 'OFFLINE (0%)', risk: 'ISOLATED' };
+    if (mode === 'RECOVERY') return { health: 72, color: 'text-amber-600', efficiency: 'Recovering (71%)', risk: 'RECOVERING' };
+    // FAULT — scale health inversely with temp
+    const h = Math.max(10, Math.min(80, Math.round(100 - (temp - 72) * 1.2)));
+    return {
+      health: h,
+      color: h < 40 ? 'text-rose-600' : 'text-amber-600',
+      efficiency: `Degraded (${h}%)`,
+      risk: h < 40 ? 'CRITICAL SYSTEM RISK' : 'ELEVATED RISK',
+    };
+  }, [telemetry, isBackendOnline]);
+
+  // Map backend downstream systems to dependency display format
+  const liveDeps = useMemo(() => {
+    if (!isBackendOnline || !downstream?.length) return null;
+    return downstream.slice(0, 4).map(sys => ({
+      id: sys.id,
+      name: sys.name,
+      status: sys.status,
+      message: sys.explanation,
+      color: sys.risk === 'CRITICAL' ? 'red' : sys.risk === 'HIGH' ? 'red' : sys.risk === 'MEDIUM' ? 'amber' : 'green',
+      pulse: sys.risk === 'CRITICAL',
+    }));
+  }, [downstream, isBackendOnline]);
+
+  // Merge backend suppressed alerts into the cascading alert table format
+  const liveAlertRows = useMemo(() => {
+    if (!isBackendOnline || !suppressedAlerts?.length) return null;
+    return suppressedAlerts.slice(0, 6).map((a, i) => ({
+      id: i + 1,
+      time: new Date((a.timestamp ?? Date.now() / 1000) * 1000).toLocaleTimeString(),
+      sensor: a.source ?? 'SENSOR',
+      issue: a.title ?? a.message,
+      status: 'Suppressed AI',
+    }));
+  }, [suppressedAlerts, isBackendOnline]);
+
+  // Backend apply-action handler
+  const handleBackendApplyAction = async (action: string) => {
+    if (!isBackendOnline) return;
+    setIsSimulating(true);
+    setShowToast(false);
+    await doApplyAction(action);
+    setTimeout(() => {
+      setIsSimulating(false);
+      setToastData({
+        title: 'Action Applied Successfully',
+        description: `${decision?.label ?? action} applied. System entering recovery mode.`,
+      });
+      setShowToast(true);
+    }, 600);
+  };
+
   const handleApplyScenario = (scenarioKey: ScenarioKey) => {
     if (!DECISION_OS_SCENARIOS[scenarioKey]) return;
     
@@ -136,7 +234,7 @@ export function DecisionOSView() {
 
   // Auto-hide toast
   useEffect(() => {
-    let timer: NodeJS.Timeout;
+    let timer: ReturnType<typeof setTimeout>;
     if (showToast) {
       timer = setTimeout(() => setShowToast(false), 5000);
     }
@@ -193,36 +291,70 @@ export function DecisionOSView() {
                 Active Monitoring & Simulation Environment
               </p>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-white shadow-sm rounded-full border border-zinc-200">
+            <div className="flex items-center gap-3 flex-wrap">
+              {/* Backend status badge */}
+              <div className={`flex items-center gap-2 px-3 py-1.5 shadow-sm rounded-full border ${isBackendOnline ? 'bg-white border-zinc-200' : 'bg-amber-50 border-amber-200'}`}>
                 <span className="relative flex h-2.5 w-2.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-600"></span>
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${isBackendOnline ? 'bg-emerald-500' : 'bg-amber-400'}`}></span>
+                  <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${isBackendOnline ? 'bg-emerald-600' : 'bg-amber-500'}`}></span>
                 </span>
-                <span className="text-xs font-bold uppercase tracking-wider text-emerald-700">Live Telemetry</span>
+                <span className={`text-xs font-bold uppercase tracking-wider ${isBackendOnline ? 'text-emerald-700' : 'text-amber-700'}`}>
+                  {isBackendOnline ? (isOllamaOnline ? 'AI + Backend Live' : 'Backend Live') : 'Offline Mode'}
+                </span>
               </div>
+              {/* Demo Controls */}
+              <button
+                onClick={() => doTriggerFault()}
+                disabled={backendLoading || !isBackendOnline}
+                className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider bg-rose-50 text-rose-700 border border-rose-200 rounded-full hover:bg-rose-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Trigger Fault
+              </button>
+              <button
+                onClick={() => doResetSystem()}
+                disabled={backendLoading || !isBackendOnline}
+                className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider bg-zinc-100 text-zinc-700 border border-zinc-200 rounded-full hover:bg-zinc-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Reset System
+              </button>
+              {isBackendOnline && decision?.recommendedAction && decision.recommendedAction !== 'NONE' && (
+                <button
+                  onClick={() => handleBackendApplyAction(decision.recommendedAction)}
+                  disabled={backendLoading}
+                  className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-300 rounded-full hover:bg-emerald-100 transition-colors disabled:opacity-40"
+                >
+                  Apply: {decision.label?.split(' ').slice(0, 3).join(' ')}
+                </button>
+              )}
             </div>
           </div>
           
-          {/* GLOBAL STATUS CARDS */}
+          {/* GLOBAL STATUS CARDS — backend preferred, fallback to mock */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="p-4 bg-white border border-zinc-200 rounded-xl shadow-sm flex flex-col justify-center">
               <div className="text-xs text-zinc-500 font-bold uppercase tracking-wider">Global Plant Health</div>
-              <div className={`text-3xl font-black mt-1 ${DECISION_OS_SCENARIOS[activeScenario]?.healthColor}`}>
-                {DECISION_OS_SCENARIOS[activeScenario]?.globalHealth}%
+              <div className={`text-3xl font-black mt-1 ${liveHealth?.color ?? DECISION_OS_SCENARIOS[activeScenario]?.healthColor}`}>
+                {liveHealth?.health ?? DECISION_OS_SCENARIOS[activeScenario]?.globalHealth}%
               </div>
+              {isBackendOnline && <div className="text-[10px] text-zinc-400 font-bold mt-1 uppercase">{telemetry?.mode} • {telemetry?.sensors?.generator_temperature?.toFixed(1)}°C</div>}
             </div>
             <div className="p-4 bg-white border border-zinc-200 rounded-xl shadow-sm flex flex-col justify-center">
               <div className="text-xs text-zinc-500 font-bold uppercase tracking-wider">Efficiency KPI</div>
               <div className="text-2xl font-black mt-1 text-zinc-800">
-                {DECISION_OS_SCENARIOS[activeScenario]?.efficiency}
+                {liveHealth?.efficiency ?? DECISION_OS_SCENARIOS[activeScenario]?.efficiency}
               </div>
+              {isBackendOnline && <div className="text-[10px] text-zinc-400 font-bold mt-1 uppercase">Load: {telemetry?.sensors?.load?.toFixed(0)}%  Flow: {telemetry?.sensors?.flow_rate?.toFixed(0)} L/min</div>}
             </div>
             <div className="p-4 bg-white border border-zinc-200 rounded-xl shadow-sm flex flex-col justify-center">
               <div className="text-xs text-zinc-500 font-bold uppercase tracking-wider">System Risk Status</div>
               <div className="text-lg font-black mt-1 text-zinc-900 leading-tight">
-                {DECISION_OS_SCENARIOS[activeScenario]?.downstreamStatus}
+                {liveHealth?.risk ?? DECISION_OS_SCENARIOS[activeScenario]?.downstreamStatus}
               </div>
+              {isBackendOnline && decision?.recommendedAction !== 'NONE' && (
+                <div className="text-[10px] text-blue-600 font-bold mt-1 uppercase">
+                  Rec: {decision?.label?.slice(0, 28)}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -245,13 +377,15 @@ export function DecisionOSView() {
                   <div className="text-left">
                     <div className="text-rose-600 font-black text-sm uppercase tracking-widest">Singular Root-Cause Identified</div>
                     <h2 className="text-zinc-900 font-bold text-lg leading-tight mt-0.5">
-                      🚨 CRITICAL: Generator 1 Core Overheating due to Coolant Leak
+                      🚨 {isBackendOnline && rootCause?.rootCause && rootCause.rootCause !== 'None'
+                        ? `CRITICAL: ${rootCause.rootCause} — ${rootCause.summary?.slice(0, 70) ?? 'Fault detected'}`
+                        : 'CRITICAL: Generator 1 Core Overheating due to Coolant Leak'}
                     </h2>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 text-rose-700">
                   <span className="text-xs font-bold bg-white px-3 py-1 rounded-full border border-rose-200 shadow-sm">
-                    View 14 Linked Cascading Alerts
+                    View {isBackendOnline ? (suppressedAlerts?.length ?? 0) + (primaryAlert ? 1 : 0) : 14} Linked Cascading Alerts
                   </span>
                   {alertsExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
                 </div>
@@ -479,7 +613,7 @@ export function DecisionOSView() {
               </div>
             </div>
 
-            {/* DOMINO-EFFECT CASCADING RISK CARD */}
+            {/* DOMINO-EFFECT CASCADING RISK CARD — backend preferred */}
             <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-md transition-all duration-300">
               <div className="flex justify-between items-center mb-4 border-b border-zinc-100 pb-2">
                 <h3 className="font-bold text-zinc-900 text-sm tracking-wider uppercase flex items-center gap-2">
@@ -487,11 +621,11 @@ export function DecisionOSView() {
                   Cascading Impacts
                 </h3>
                 <span className="text-[10px] px-2 py-0.5 bg-zinc-100 rounded font-bold uppercase tracking-wider text-zinc-600 border border-zinc-200">
-                  {DECISION_OS_SCENARIOS[activeScenario]?.downstreamStatus}
+                  {liveHealth?.risk ?? DECISION_OS_SCENARIOS[activeScenario]?.downstreamStatus}
                 </span>
               </div>
               <div className="space-y-3">
-                {(DECISION_OS_SCENARIOS[activeScenario]?.dependencies || []).map((dep: any) => {
+                {(liveDeps ?? DECISION_OS_SCENARIOS[activeScenario]?.dependencies ?? []).map((dep: any) => {
                   const badgeColors: Record<string, string> = {
                     red: "bg-rose-50 text-rose-700 border-rose-200",
                     amber: "bg-amber-50 text-amber-700 border-amber-200",
@@ -510,6 +644,12 @@ export function DecisionOSView() {
                   );
                 })}
               </div>
+              {isBackendOnline && isOllamaOnline && decision?.aiExplanation && (
+                <div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-lg">
+                  <div className="text-[10px] font-black uppercase tracking-widest text-blue-500 mb-1">AI Explanation</div>
+                  <p className="text-xs text-zinc-700 leading-relaxed">{decision.aiExplanation}</p>
+                </div>
+              )}
             </div>
 
           </div>
